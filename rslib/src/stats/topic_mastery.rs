@@ -112,6 +112,81 @@ impl Collection {
     }
 }
 
+impl Collection {
+    /// Order cards by points-at-stake = topic_weight * (1 - retrievability), so the
+    /// highest-value cards (heavily weighted + most likely forgotten) come first.
+    /// Uncovered/unseen cards are excluded (nothing to review yet).
+    pub(crate) fn points_at_stake_order(
+        &mut self,
+        search: &str,
+        topic_weights: &std::collections::HashMap<String, f32>,
+        mastered_threshold: f32,
+    ) -> Result<anki_proto::stats::PointsAtStakeResponse> {
+        let _ = mastered_threshold; // reserved for future filtering
+        let guard = self.search_cards_into_table(search, SortMode::NoOrder)?;
+        let cards = guard.col.storage.all_searched_cards()?;
+        let timing = guard.col.timing_today()?;
+        let timing = SchedTimingToday {
+            days_elapsed: timing.days_elapsed,
+            now: TimestampSecs::now(),
+            next_day_at: timing.next_day_at,
+        };
+        let fsrs = FSRS::new(None).unwrap();
+        let mut tags_cache: HashMap<NoteId, Vec<String>> = HashMap::new();
+        let mut out: Vec<anki_proto::stats::PointsAtStakeCard> = Vec::new();
+
+        for card in &cards {
+            let state = match card.memory_state {
+                Some(s) => s,
+                None => continue,
+            };
+            let tags = match tags_cache.get(&card.note_id) {
+                Some(t) => t,
+                None => {
+                    let nt = guard
+                        .col
+                        .storage
+                        .get_note(card.note_id)?
+                        .map(|n| n.tags)
+                        .unwrap_or_default();
+                    tags_cache.entry(card.note_id).or_insert(nt)
+                }
+            };
+            // pick the highest-weighted matching topic tag for this card
+            let mut best: Option<(&String, f32)> = None;
+            for tag in tags.iter() {
+                if let Some(w) = topic_weights.get(tag) {
+                    if best.map(|(_, bw)| *w > bw).unwrap_or(true) {
+                        best = Some((tag, *w));
+                    }
+                }
+            }
+            let (topic_id, weight) = match best {
+                Some((t, w)) => (t.clone(), w),
+                None => continue,
+            };
+            let elapsed = card.seconds_since_last_review(&timing).unwrap_or_default();
+            let r = fsrs.current_retrievability_seconds(
+                state.into(),
+                elapsed,
+                card.decay.unwrap_or(FSRS5_DEFAULT_DECAY),
+            );
+            out.push(anki_proto::stats::PointsAtStakeCard {
+                card_id: card.id.0,
+                topic_id,
+                points_at_stake: weight * (1.0 - r),
+                retrievability: r,
+            });
+        }
+        out.sort_by(|a, b| {
+            b.points_at_stake
+                .partial_cmp(&a.points_at_stake)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(anki_proto::stats::PointsAtStakeResponse { cards: out })
+    }
+}
+
 /// Tags under the namespace are MCAT topics. `mcat` matches `mcat::bb::x`.
 /// A bare `mcat` tag (no subtopic) is ignored - it is not a topic.
 fn matching_topics(tags: &[String], prefix: &str) -> Vec<String> {
@@ -205,5 +280,28 @@ mod test {
         let tags = vec!["mcat".to_string(), "mcat::bb::enzymes".to_string()];
         let topics = matching_topics(&tags, "mcat");
         assert_eq!(topics, vec!["mcat::bb::enzymes".to_string()]);
+    }
+
+    #[test]
+    fn points_at_stake_orders_high_weight_first() -> Result<()> {
+        let mut col = Collection::new();
+        let a = add_tagged_card(&mut col, &["mcat::bb::enzymes"], Some((10.0, 5.0)), 3);
+        let b = add_tagged_card(&mut col, &["mcat::cp::optics_sound"], Some((10.0, 5.0)), 3);
+        // backdate both reviews 30 days so retrievability < 1 (equal for both)
+        for cid in [a, b] {
+            let mut card = col.storage.get_card(cid)?.unwrap();
+            card.last_review_time = Some(TimestampSecs(TimestampSecs::now().0 - 30 * 86400));
+            col.storage.update_card(&card)?;
+        }
+        let mut weights = std::collections::HashMap::new();
+        weights.insert("mcat::bb::enzymes".to_string(), 0.5f32);
+        weights.insert("mcat::cp::optics_sound".to_string(), 0.2f32);
+        let resp = col.points_at_stake_order("", &weights, 0.7)?;
+        assert_eq!(resp.cards.len(), 2);
+        // higher topic weight (same forgetting risk) -> higher stake -> first
+        assert_eq!(resp.cards[0].card_id, a.0);
+        assert!(resp.cards[0].points_at_stake > resp.cards[1].points_at_stake);
+        assert!(resp.cards[0].retrievability < 1.0);
+        Ok(())
     }
 }

@@ -50,6 +50,13 @@ impl crate::services::StatsService for Collection {
     ) -> error::Result<anki_proto::stats::ReadinessResponse> {
         self.compute_readiness(input)
     }
+
+    fn points_at_stake_order(
+        &mut self,
+        input: anki_proto::stats::PointsAtStakeRequest,
+    ) -> error::Result<anki_proto::stats::PointsAtStakeResponse> {
+        self.points_at_stake_order(&input.search, &input.topic_weights, input.mastered_threshold)
+    }
 }
 
 impl From<RevlogReviewKind> for i32 {

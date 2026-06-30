@@ -24,6 +24,9 @@ service StatsService {
   // Inference runs here in the engine so desktop and AnkiDroid show identical
   // numbers; model training stays offline and feeds in via `params`.
   rpc ComputeReadiness(ReadinessRequest) returns (ReadinessResponse);
+  // MCAT readiness: order due cards by points-at-stake (topic weight x forgetting
+  // risk) so the highest-value cards can be studied first.
+  rpc PointsAtStakeOrder(PointsAtStakeRequest) returns (PointsAtStakeResponse);
 }
 
 // Implicitly includes any of the above methods that are not listed in the
@@ -179,6 +182,26 @@ message ReadinessResponse {
   // (most useful when readiness is withheld): the single highest-value study
   // actions, each with a learning-science rationale.
   repeated NextAction next_actions = 3;
+}
+
+// --- MCAT readiness: points-at-stake study order -------------------------
+message PointsAtStakeRequest {
+  string search = 1;
+  // topic_id -> within-section weight (caller bundles the AAMC outline).
+  map<string, float> topic_weights = 2;
+  float mastered_threshold = 3;
+}
+
+message PointsAtStakeResponse {
+  repeated PointsAtStakeCard cards = 1;
+}
+
+message PointsAtStakeCard {
+  int64 card_id = 1;
+  string topic_id = 2;
+  // topic_weight * (1 - retrievability)
+  float points_at_stake = 3;
+  float retrievability = 4;
 }
 
 // One recommended study action, rooted in learning science.
