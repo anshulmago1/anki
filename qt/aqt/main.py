@@ -1471,6 +1471,14 @@ title="{}" {}>{}</button>""".format(
             m.action_upgrade_downgrade.setVisible(False)
         qconnect(m.actionPreferences.triggered, self.onPrefs)
 
+        # MCAT Readiness (fork addition): Tools -> MCAT Readiness
+        try:
+            from aqt import mcat
+
+            mcat.setup_mcat_menu(self)
+        except Exception as exc:
+            print("MCAT menu setup failed:", exc)
+
         # View
         qconnect(
             m.actionZoomIn.triggered,

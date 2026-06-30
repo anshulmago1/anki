@@ -16,6 +16,14 @@ service StatsService {
   rpc Graphs(GraphsRequest) returns (GraphsResponse);
   rpc GetGraphPreferences(generic.Empty) returns (GraphPreferences);
   rpc SetGraphPreferences(GraphPreferences) returns (generic.Empty);
+  // MCAT readiness: per-topic mastery aggregation powering the Memory score and
+  // the coverage/abstention gate. Groups cards by note tags under `topic_prefix`.
+  rpc TopicMastery(TopicMasteryRequest) returns (TopicMasteryResponse);
+  // MCAT readiness: the three separated scores (memory, performance, readiness)
+  // per section, each with a range + evidence, with the give-up rule enforced.
+  // Inference runs here in the engine so desktop and AnkiDroid show identical
+  // numbers; model training stays offline and feeds in via `params`.
+  rpc ComputeReadiness(ReadinessRequest) returns (ReadinessResponse);
 }
 
 // Implicitly includes any of the above methods that are not listed in the
@@ -73,6 +81,100 @@ message CardStatsResponse {
 message GraphsRequest {
   string search = 1;
   uint32 days = 2;
+}
+
+// --- MCAT readiness: topic mastery query ---------------------------------
+message TopicMasteryRequest {
+  // Anki search limiting which cards to consider (empty = whole collection).
+  string search = 1;
+  // Tag namespace that marks MCAT topics, e.g. "mcat" matches tags like
+  // "mcat::bb::amino_acids_proteins".
+  string topic_prefix = 2;
+  // A card counts as "mastered" when its FSRS retrievability exceeds this.
+  float mastered_threshold = 3;
+}
+
+message TopicMasteryResponse {
+  repeated TopicMasteryStats topics = 1;
+}
+
+// Per-topic evidence behind the Memory score. No bare numbers: every field is a
+// measured quantity the dashboard can attribute (cards, reviews, recall).
+message TopicMasteryStats {
+  // Full tag, e.g. "mcat::bb::amino_acids_proteins".
+  string topic_id = 1;
+  // Cards carrying this topic tag within the search.
+  uint32 card_count = 2;
+  // Cards whose current FSRS retrievability > mastered_threshold.
+  uint32 mastered_count = 3;
+  // Card-weighted mean FSRS retrievability for this topic (the Memory signal).
+  float mean_retrievability = 4;
+  // Total graded reviews behind these cards (evidence volume for abstention).
+  uint32 graded_reviews = 5;
+}
+
+// --- MCAT readiness: the three scores -------------------------------------
+// Coefficients + give-up thresholds. Trained offline (Python), passed in here so
+// the engine only does inference (keeps the engine exam-agnostic).
+message ReadinessParams {
+  float b0 = 1;
+  float b_m = 2;
+  float b_p = 3;
+  float b_c = 4;
+  uint32 min_graded_reviews = 5;  // give-up: per-section reviews
+  float min_coverage = 6;         // give-up: per-section coverage fraction
+  float max_irt_se = 7;           // give-up: max IRT standard error
+}
+
+// One MCAT section. Topic weights + the offline-estimated performance signal are
+// supplied by the caller (which bundles the AAMC outline); memory is measured
+// here from the live cards.
+message ReadinessSectionInput {
+  string section = 1;                  // "BB" | "CP" | "PS" | "CARS"
+  string topic_prefix = 2;             // e.g. "mcat::bb"
+  map<string, float> topic_weights = 3;  // topic_id -> within-section weight
+  float performance = 4;               // P_s from the IRT model (offline)
+  float theta_se = 5;                  // IRT standard error for P_s
+  float alpha_space = 6;               // learning-science multipliers (each cited)
+  float alpha_inter = 7;
+  float alpha_test = 8;
+}
+
+message ReadinessRequest {
+  string search = 1;
+  float mastered_threshold = 2;
+  repeated ReadinessSectionInput sections = 3;
+  ReadinessParams params = 4;
+}
+
+// One score with its evidence. Never a bare number: if it cannot be justified,
+// `abstained` is true and `missing` lists what's needed.
+message EvidencedScore {
+  float value = 1;
+  float range_lo = 2;
+  float range_hi = 3;
+  string confidence = 4;          // low | moderate | high
+  uint32 graded_reviews = 5;
+  float coverage_pct = 6;
+  string method = 7;              // named source/method behind the number
+  bool abstained = 8;
+  repeated string missing = 9;
+  repeated string drivers = 10;   // human-readable reasons
+}
+
+message ReadinessSection {
+  string section = 1;
+  EvidencedScore memory = 2;
+  EvidencedScore performance = 3;
+  EvidencedScore readiness = 4;
+  string next_best_topic = 5;
+  float next_best_points_at_stake = 6;
+}
+
+message ReadinessResponse {
+  repeated ReadinessSection sections = 1;
+  // Total MCAT 472-528. Abstains if any section abstains.
+  EvidencedScore total = 2;
 }
 
 message GraphsResponse {
