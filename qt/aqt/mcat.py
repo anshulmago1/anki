@@ -216,6 +216,24 @@ class MCATReadinessDialog(QDialog):
                 f"· confidence {total.confidence}</div></div>"
             )
 
+        # Global "what to do next" — always present, ranked by points-at-stake.
+        ICONS = {"cover": "🧭", "review": "🔁", "practice_check": "📝"}
+        actions_html = ""
+        if resp.next_actions:
+            items = ""
+            for a in resp.next_actions:
+                label = _short(a.topic_id) if a.topic_id else f"{a.section} question check"
+                items += (
+                    f"<li><span class='atype'>{ICONS.get(a.action_type, '•')} "
+                    f"{a.action_type.replace('_', ' ')}</span> "
+                    f"<b>{a.section} · {label}</b>"
+                    f"<div class='areason'>{a.reason}</div></li>"
+                )
+            actions_html = (
+                "<div class='actions-panel'><div class='ap-title'>Do this next "
+                "(highest points at stake)</div><ol>" + items + "</ol></div>"
+            )
+
         rows = []
         for s in resp.sections:
             m, p, r = s.memory, s.performance, s.readiness
@@ -266,8 +284,14 @@ class MCATReadinessDialog(QDialog):
                  background:rgba(80,140,255,.15);cursor:pointer;font-size:13px;}
           .nba{font-size:12px;opacity:.7;}
           .caveat{margin-top:8px;font-size:12px;opacity:.7;line-height:1.5;border-top:1px solid rgba(128,128,128,.25);padding-top:10px;}
+          .actions-panel{border:1px solid rgba(80,140,255,.4);background:rgba(80,140,255,.08);border-radius:12px;padding:14px;margin-bottom:16px;}
+          .ap-title{font-weight:700;margin-bottom:8px;}
+          .actions-panel ol{margin:0;padding-left:20px;}
+          .actions-panel li{margin-bottom:8px;}
+          .atype{font-size:11px;text-transform:uppercase;letter-spacing:.03em;opacity:.7;margin-right:6px;}
+          .areason{font-size:12px;opacity:.75;line-height:1.4;margin-top:2px;}
         """
-        return f"<style>{css}</style>{head}{''.join(rows)}{caveat}"
+        return f"<style>{css}</style>{head}{actions_html}{''.join(rows)}{caveat}"
 
 
 def _short(topic_id: str) -> str:

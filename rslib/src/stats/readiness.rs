@@ -12,6 +12,7 @@
 //! missing requirements listed, and the total abstains too.
 
 use anki_proto::stats::EvidencedScore;
+use anki_proto::stats::NextAction;
 use anki_proto::stats::ReadinessRequest;
 use anki_proto::stats::ReadinessResponse;
 use anki_proto::stats::ReadinessSection;
@@ -35,12 +36,15 @@ impl Collection {
     ) -> Result<ReadinessResponse> {
         let params = req.params.unwrap_or(default_params());
         let mut sections = Vec::with_capacity(req.sections.len());
+        let mut actions: Vec<NextAction> = Vec::new();
         let mut any_abstain = false;
         let mut total_value = 0.0f32;
         let mut total_var = 0.0f32;
 
         for sec in &req.sections {
-            let section = self.readiness_for_section(&req.search, req.mastered_threshold, sec, &params)?;
+            let (section, mut section_actions) =
+                self.readiness_for_section(&req.search, req.mastered_threshold, sec, &params)?;
+            actions.append(&mut section_actions);
             if let Some(r) = &section.readiness {
                 if r.abstained {
                     any_abstain = true;
@@ -52,6 +56,15 @@ impl Collection {
             }
             sections.push(section);
         }
+
+        // Global "what to do next": highest points-at-stake first. Always present,
+        // and most useful precisely when readiness is withheld.
+        actions.sort_by(|a, b| {
+            b.points_at_stake
+                .partial_cmp(&a.points_at_stake)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        actions.truncate(6);
 
         let hw = total_var.sqrt();
         let total = EvidencedScore {
@@ -81,6 +94,7 @@ impl Collection {
         Ok(ReadinessResponse {
             sections,
             total: Some(total),
+            next_actions: actions,
         })
     }
 
@@ -90,7 +104,7 @@ impl Collection {
         mastered_threshold: f32,
         sec: &ReadinessSectionInput,
         params: &anki_proto::stats::ReadinessParams,
-    ) -> Result<ReadinessSection> {
+    ) -> Result<(ReadinessSection, Vec<NextAction>)> {
         // Memory is measured live from cards via the mastery query.
         let mastery = self.topic_mastery_for_search(search, &sec.topic_prefix, mastered_threshold)?;
         let by_topic: std::collections::HashMap<&str, &anki_proto::stats::TopicMasteryStats> =
@@ -102,6 +116,7 @@ impl Collection {
         let total_topics = sec.topic_weights.len().max(1);
         let mut best_topic = String::new();
         let mut best_stake = -1.0f32;
+        let mut actions: Vec<NextAction> = Vec::new();
 
         for (topic_id, weight) in &sec.topic_weights {
             let (mean_r, has_cards) = by_topic
@@ -118,6 +133,34 @@ impl Collection {
             if stake > best_stake {
                 best_stake = stake;
                 best_topic = topic_id.clone();
+            }
+            // candidate next action for this topic
+            if !has_cards {
+                actions.push(NextAction {
+                    section: sec.section.clone(),
+                    topic_id: topic_id.clone(),
+                    action_type: "cover".to_string(),
+                    points_at_stake: *weight,
+                    reason: format!(
+                        "Untested: no cards for this topic (exam weight {:.0}% of {}). Cover blind \
+                         spots first so readiness isn't inflated by what you skipped.",
+                        weight * 100.0,
+                        sec.section
+                    ),
+                });
+            } else if mean_r < 0.9 {
+                actions.push(NextAction {
+                    section: sec.section.clone(),
+                    topic_id: topic_id.clone(),
+                    action_type: "review".to_string(),
+                    points_at_stake: stake,
+                    reason: format!(
+                        "~{:.0}% likely lapsed (retrievability {:.2}). Reviewing at the forgetting \
+                         edge gives the biggest durable-memory gain (spacing effect).",
+                        (1.0 - mean_r) * 100.0,
+                        mean_r
+                    ),
+                });
             }
         }
 
@@ -194,14 +237,31 @@ impl Collection {
             drivers,
         };
 
-        Ok(ReadinessSection {
+        // Section-level action: if there's content to test but no transfer
+        // evidence, recommend a question check (recognition != transfer).
+        if covered > 0 && sec.theta_se > params.max_irt_se {
+            actions.push(NextAction {
+                section: sec.section.clone(),
+                topic_id: String::new(),
+                action_type: "practice_check".to_string(),
+                points_at_stake: 0.45,
+                reason: format!(
+                    "No transfer evidence for {} yet. Take a question check so Performance can be \
+                     estimated - recalling a card is not the same as answering a passage.",
+                    sec.section
+                ),
+            });
+        }
+
+        let section = ReadinessSection {
             section: sec.section.clone(),
             memory: Some(memory),
             performance: Some(performance),
             readiness: Some(readiness),
             next_best_topic: best_topic,
             next_best_points_at_stake: best_stake.max(0.0),
-        })
+        };
+        Ok((section, actions))
     }
 }
 
@@ -338,6 +398,29 @@ mod test {
         let mem = resp.sections[0].memory.as_ref().unwrap();
         assert!(mem.value > 0.9, "recently reviewed high-stability card -> high retrievability");
         assert_eq!(mem.coverage_pct, 100.0);
+        Ok(())
+    }
+
+    #[test]
+    fn next_actions_rank_uncovered_topic_first() -> Result<()> {
+        let mut col = Collection::new();
+        // enzymes covered + fresh (low stake); nucleic_acids uncovered (full weight)
+        add(&mut col, "mcat::bb::enzymes", Some((1000.0, 5.0)), 3);
+        let sec = section("mcat::bb", &[("mcat::bb::enzymes", 0.4), ("mcat::bb::nucleic_acids", 0.6)], 0.6);
+        let resp = col.compute_readiness(ReadinessRequest {
+            search: String::new(),
+            mastered_threshold: 0.7,
+            sections: vec![sec],
+            params: None,
+        })?;
+        assert!(!resp.next_actions.is_empty(), "there is always a next action");
+        let top = &resp.next_actions[0];
+        assert_eq!(top.action_type, "cover");
+        assert_eq!(top.topic_id, "mcat::bb::nucleic_acids");
+        // sorted by points-at-stake descending
+        for pair in resp.next_actions.windows(2) {
+            assert!(pair[0].points_at_stake >= pair[1].points_at_stake);
+        }
         Ok(())
     }
 }

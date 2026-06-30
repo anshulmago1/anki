@@ -175,6 +175,24 @@ message ReadinessResponse {
   repeated ReadinessSection sections = 1;
   // Total MCAT 472-528. Abstains if any section abstains.
   EvidencedScore total = 2;
+  // Global, ranked "what to do next" list across all sections. Always populated
+  // (most useful when readiness is withheld): the single highest-value study
+  // actions, each with a learning-science rationale.
+  repeated NextAction next_actions = 3;
+}
+
+// One recommended study action, rooted in learning science.
+message NextAction {
+  string section = 1;
+  // Topic tag for topic-level actions; empty for section-level actions.
+  string topic_id = 2;
+  // "cover" (untested topic), "review" (forgetting risk), or
+  // "practice_check" (need transfer/performance evidence).
+  string action_type = 3;
+  // topic_weight * (1 - retrievability); uncovered topics carry full weight.
+  float points_at_stake = 4;
+  // Human-readable, learning-science-grounded reason.
+  string reason = 5;
 }
 
 message GraphsResponse {
