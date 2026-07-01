@@ -1470,14 +1470,8 @@ title="{}" {}>{}</button>""".format(
         else:
             m.action_upgrade_downgrade.setVisible(False)
         qconnect(m.actionPreferences.triggered, self.onPrefs)
-
-        # MCAT Readiness (fork addition): Tools -> MCAT Readiness
-        try:
-            from aqt import mcat
-
-            mcat.setup_mcat_menu(self)
-        except Exception as exc:
-            print("MCAT menu setup failed:", exc)
+        # MCAT readiness now lives inside the Statistics page (Tools -> Statistics),
+        # rendered by ts/routes/graphs/ReadinessCard.svelte.
 
         # View
         qconnect(

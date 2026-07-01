@@ -740,6 +740,12 @@ exposed_backend_list = [
     "graphs",
     "get_graph_preferences",
     "set_graph_preferences",
+    # StatsService - MCAT readiness (fork addition)
+    "topic_mastery",
+    "compute_readiness",
+    "points_at_stake_order",
+    # ConfigService - readiness reads mcat_perf (fork addition)
+    "get_config_json",
     # TagsService
     "complete_tag",
     # ImageOcclusionService
