@@ -6,6 +6,7 @@ mod graphs;
 mod readiness;
 mod service;
 mod today;
+mod topic_graph;
 mod topic_mastery;
 
 pub use today::studied_today;

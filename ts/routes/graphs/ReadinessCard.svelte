@@ -11,6 +11,7 @@ scores + ranges + give-up rule + the global next-best-action list.
     import type { ReadinessResponse } from "@generated/anki/stats_pb";
     import { onMount } from "svelte";
 
+    // <OUTLINE-GEN> generated from data/aamc_outline.json by analysis/gen_outline_maps.py -- do not edit by hand
     const SECTION_NAMES: Record<string, string> = {
         BB: "Biological & Biochemical",
         CP: "Chemical & Physical",
@@ -21,23 +22,36 @@ scores + ranges + give-up rule + the global next-best-action list.
     // AAMC outline weights (section -> {topic_id: within-section weight}).
     const OUTLINE: Record<string, Record<string, number>> = {
         BB: {
-            "mcat::bb::amino_acids_proteins": 0.16, "mcat::bb::enzymes": 0.14,
-            "mcat::bb::nucleic_acids": 0.12, "mcat::bb::metabolism": 0.14,
-            "mcat::bb::cell_biology": 0.12, "mcat::bb::microbiology": 0.06,
-            "mcat::bb::genetics": 0.1, "mcat::bb::organ_systems": 0.16,
+            "mcat::bb::amino_acids_proteins": 0.16,
+            "mcat::bb::enzymes": 0.14,
+            "mcat::bb::nucleic_acids": 0.12,
+            "mcat::bb::metabolism": 0.14,
+            "mcat::bb::cell_biology": 0.12,
+            "mcat::bb::microbiology": 0.06,
+            "mcat::bb::genetics": 0.1,
+            "mcat::bb::organ_systems": 0.16,
         },
         CP: {
-            "mcat::cp::atomic_structure": 0.08, "mcat::cp::bonding": 0.08,
-            "mcat::cp::thermodynamics": 0.12, "mcat::cp::kinetics": 0.12,
-            "mcat::cp::acids_bases": 0.12, "mcat::cp::electrochemistry": 0.08,
-            "mcat::cp::mechanics": 0.12, "mcat::cp::electrostatics_circuits": 0.1,
-            "mcat::cp::optics_sound": 0.08, "mcat::cp::organic_chemistry": 0.1,
+            "mcat::cp::atomic_structure": 0.08,
+            "mcat::cp::bonding": 0.08,
+            "mcat::cp::thermodynamics": 0.12,
+            "mcat::cp::kinetics": 0.12,
+            "mcat::cp::acids_bases": 0.12,
+            "mcat::cp::electrochemistry": 0.08,
+            "mcat::cp::mechanics": 0.12,
+            "mcat::cp::electrostatics_circuits": 0.1,
+            "mcat::cp::optics_sound": 0.08,
+            "mcat::cp::organic_chemistry": 0.1,
         },
         PS: {
-            "mcat::ps::sensation_perception": 0.12, "mcat::ps::learning_memory": 0.14,
-            "mcat::ps::cognition_language": 0.12, "mcat::ps::motivation_emotion": 0.12,
-            "mcat::ps::identity_personality": 0.12, "mcat::ps::social_processes": 0.14,
-            "mcat::ps::social_structure": 0.12, "mcat::ps::demographics_inequality": 0.12,
+            "mcat::ps::sensation_perception": 0.12,
+            "mcat::ps::learning_memory": 0.14,
+            "mcat::ps::cognition_language": 0.12,
+            "mcat::ps::motivation_emotion": 0.12,
+            "mcat::ps::identity_personality": 0.12,
+            "mcat::ps::social_processes": 0.14,
+            "mcat::ps::social_structure": 0.12,
+            "mcat::ps::demographics_inequality": 0.12,
         },
         CARS: {
             "mcat::cars::foundations_comprehension": 0.3,
@@ -45,6 +59,7 @@ scores + ranges + give-up rule + the global next-best-action list.
             "mcat::cars::reasoning_beyond_text": 0.4,
         },
     };
+    // </OUTLINE-GEN>
 
     const ICONS: Record<string, string> = {
         cover: "\u{1F9ED}",
@@ -66,7 +81,10 @@ scores + ranges + give-up rule + the global next-best-action list.
 
     async function readPerf(): Promise<Record<string, { correct: number; total: number }>> {
         try {
-            const res = await getConfigJson({ val: "mcat_perf" });
+            // mcat_perf may not exist yet (no exam-style questions answered). A
+            // missing key is expected, so suppress the global error dialog and
+            // fall back to "no performance data" rather than crashing the page.
+            const res = await getConfigJson({ val: "mcat_perf" }, { alertOnError: false });
             const txt = new TextDecoder().decode(res.json);
             return JSON.parse(txt);
         } catch {

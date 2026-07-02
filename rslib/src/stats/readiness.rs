@@ -41,9 +41,23 @@ impl Collection {
         let mut total_value = 0.0f32;
         let mut total_var = 0.0f32;
 
+        // Measure per-topic memory ONCE over the whole collection, then distribute
+        // topics to sections. Previously each section re-scanned every card (an
+        // O(sections x cards) pass); this makes the dashboard first load a single
+        // O(cards) pass so it stays within the section-10 latency target on 50k cards.
+        let root_prefix = req
+            .sections
+            .first()
+            .map(|s| s.topic_prefix.split("::").next().unwrap_or("mcat"))
+            .unwrap_or("mcat")
+            .to_string();
+        let mastery =
+            self.topic_mastery_for_search(&req.search, &root_prefix, req.mastered_threshold)?;
+        let by_topic: std::collections::HashMap<&str, &anki_proto::stats::TopicMasteryStats> =
+            mastery.topics.iter().map(|t| (t.topic_id.as_str(), t)).collect();
+
         for sec in &req.sections {
-            let (section, mut section_actions) =
-                self.readiness_for_section(&req.search, req.mastered_threshold, sec, &params)?;
+            let (section, mut section_actions) = readiness_for_section(sec, &params, &by_topic);
             actions.append(&mut section_actions);
             if let Some(r) = &section.readiness {
                 if r.abstained {
@@ -98,18 +112,17 @@ impl Collection {
         })
     }
 
-    fn readiness_for_section(
-        &mut self,
-        search: &str,
-        mastered_threshold: f32,
-        sec: &ReadinessSectionInput,
-        params: &anki_proto::stats::ReadinessParams,
-    ) -> Result<(ReadinessSection, Vec<NextAction>)> {
-        // Memory is measured live from cards via the mastery query.
-        let mastery = self.topic_mastery_for_search(search, &sec.topic_prefix, mastered_threshold)?;
-        let by_topic: std::collections::HashMap<&str, &anki_proto::stats::TopicMasteryStats> =
-            mastery.topics.iter().map(|t| (t.topic_id.as_str(), t)).collect();
+}
 
+/// Assemble one section's three scores from a pre-computed topic-mastery map.
+/// Pure (no collection access) so `compute_readiness` can measure memory once and
+/// share it across all sections.
+fn readiness_for_section(
+    sec: &ReadinessSectionInput,
+    params: &anki_proto::stats::ReadinessParams,
+    by_topic: &std::collections::HashMap<&str, &anki_proto::stats::TopicMasteryStats>,
+) -> (ReadinessSection, Vec<NextAction>) {
+    {
         let mut m_s = 0.0f32;
         let mut graded: u32 = 0;
         let mut covered = 0usize;
@@ -261,7 +274,7 @@ impl Collection {
             next_best_topic: best_topic,
             next_best_points_at_stake: best_stake.max(0.0),
         };
-        Ok((section, actions))
+        (section, actions)
     }
 }
 

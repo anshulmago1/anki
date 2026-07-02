@@ -57,6 +57,13 @@ impl crate::services::StatsService for Collection {
     ) -> error::Result<anki_proto::stats::PointsAtStakeResponse> {
         self.points_at_stake_order(&input.search, &input.topic_weights, input.mastered_threshold)
     }
+
+    fn topic_graph(
+        &mut self,
+        input: anki_proto::stats::TopicGraphRequest,
+    ) -> error::Result<anki_proto::stats::TopicGraphResponse> {
+        self.topic_graph(input)
+    }
 }
 
 impl From<RevlogReviewKind> for i32 {

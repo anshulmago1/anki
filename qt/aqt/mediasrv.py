@@ -744,6 +744,7 @@ exposed_backend_list = [
     "topic_mastery",
     "compute_readiness",
     "points_at_stake_order",
+    "topic_graph",
     # ConfigService - readiness reads mcat_perf (fork addition)
     "get_config_json",
     # TagsService

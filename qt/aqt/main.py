@@ -688,6 +688,14 @@ class AnkiQt(QMainWindow):
     def _loadCollection(self) -> None:
         cpath = self.pm.collectionPath()
         self.col = Collection(cpath, backend=self.backend)
+        # MCAT readiness (fork addition): ensure the per-section performance config
+        # key exists so the Statistics readiness card's config read never raises a
+        # "No such value: 'mcat_perf'" backend error on a fresh profile.
+        try:
+            if self.col.get_config("mcat_perf", None) is None:
+                self.col.set_config("mcat_perf", {})
+        except Exception:
+            pass
         self.setEnabled(True)
 
     def reopen(self, after_full_sync: bool = False) -> None:

@@ -13,6 +13,7 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
     import GraphsPage from "./GraphsPage.svelte";
     import HourGraph from "./HourGraph.svelte";
     import IntervalsGraph from "./IntervalsGraph.svelte";
+    import KnowledgeGraph from "./KnowledgeGraph.svelte";
     import RangeBox from "./RangeBox.svelte";
     import ReadinessCard from "./ReadinessCard.svelte";
     import RetrievabilityGraph from "./RetrievabilityGraph.svelte";
@@ -40,6 +41,8 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
 </script>
 
 <ReadinessCard />
+
+<KnowledgeGraph />
 
 <GraphsPage
     {graphs}

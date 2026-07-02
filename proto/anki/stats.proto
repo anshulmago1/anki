@@ -27,6 +27,10 @@ service StatsService {
   // MCAT readiness: order due cards by points-at-stake (topic weight x forgetting
   // risk) so the highest-value cards can be studied first.
   rpc PointsAtStakeOrder(PointsAtStakeRequest) returns (PointsAtStakeResponse);
+  // MCAT knowledge graph: per-node mastery + prerequisite "learning_ready" gate
+  // + points-at-stake + a recommended traversal path. Powers the cue-diagnostics
+  // graph so the learner always has a next concept to master.
+  rpc TopicGraph(TopicGraphRequest) returns (TopicGraphResponse);
 }
 
 // Implicitly includes any of the above methods that are not listed in the
@@ -216,6 +220,51 @@ message NextAction {
   float points_at_stake = 4;
   // Human-readable, learning-science-grounded reason.
   string reason = 5;
+}
+
+// --- MCAT knowledge graph (cue-diagnostics graph) ------------------------
+message TopicGraphNode {
+  string id = 1;       // == topic tag, e.g. "mcat::bb::enzymes"
+  string section = 2;  // BB | CP | PS | CARS
+  string label = 3;    // human-readable name
+  float weight = 4;    // within-section AAMC weight
+}
+
+message TopicGraphEdge {
+  string from = 1;  // prerequisite concept
+  string to = 2;    // concept that depends on `from`
+}
+
+message TopicGraphRequest {
+  string search = 1;             // Anki search limiting cards (empty = whole collection)
+  string topic_prefix = 2;       // tag namespace, default "mcat"
+  float mastered_threshold = 3;  // per-card retrievability threshold for "mastered card"
+  float mastery_threshold = 4;   // node mean-retrievability >= this => node mastered
+  repeated TopicGraphNode nodes = 5;
+  repeated TopicGraphEdge prereq_edges = 6;  // directed A->B
+}
+
+message TopicGraphNodeStat {
+  string id = 1;
+  string section = 2;
+  string label = 3;
+  float weight = 4;
+  uint32 card_count = 5;
+  uint32 mastered_count = 6;
+  float mean_retrievability = 7;
+  uint32 graded_reviews = 8;
+  bool covered = 9;            // has at least one card
+  bool mastered = 10;          // covered AND mean_retrievability >= mastery_threshold
+  bool learning_ready = 11;    // every prerequisite is mastered (or none)
+  float points_at_stake = 12;  // weight * (1 - mean_retr); uncovered carries full weight
+  repeated string unmet_prereqs = 13;  // prerequisites not yet mastered
+}
+
+message TopicGraphResponse {
+  repeated TopicGraphNodeStat nodes = 1;
+  // Recommended traversal: unmastered node ids in a prerequisite-respecting,
+  // points-at-stake-greedy order. The first entry is the single next concept.
+  repeated string recommended_path = 2;
 }
 
 message GraphsResponse {
