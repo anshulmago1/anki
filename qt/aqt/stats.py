@@ -134,8 +134,63 @@ class NewDeckStats(QDialog):
             _, query = cmd.split(":", 1)
             browser = aqt.dialogs.open("Browser", self.mw)
             browser.search_for(query)
+        elif cmd.startswith("aiTargeted:"):
+            # MCAT fork: graph-guided one-click AI card generation for a topic.
+            self._ai_targeted(cmd.split(":", 1)[1])
 
         return False
+
+    def _ai_targeted(self, topic: str) -> None:
+        """Generate source-grounded, checker-verified cards for `topic` via the
+        local LLM (off the UI thread) and add the passing ones to the collection.
+        Reuses the analysis/ai pipeline; dev-tree + Ollama only."""
+        import sys
+        from pathlib import Path
+
+        ai_dir = Path(__file__).resolve().parents[3] / "analysis" / "ai"
+        if not ai_dir.exists():
+            tooltip("Targeted generation needs the dev tree (analysis/ai).", parent=self)
+            return
+        for p in (str(ai_dir), str(ai_dir.parent)):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        tooltip(f"Generating grounded cards for {topic.split('::')[-1]}\u2026", parent=self)
+
+        def task() -> dict:
+            try:
+                from aicommon import load_gold, load_sources, ollama_available
+
+                if not ollama_available():
+                    return {"error": "Ollama not running (start `ollama serve`)."}
+                import targeted_gen as tg
+
+                return {"cards": tg.generate_for_topic(topic, load_sources(), load_gold())}
+            except Exception as e:  # noqa: BLE001 - surface any failure to the user
+                return {"error": f"generation failed: {e}"}
+
+        def on_done(fut) -> None:
+            r = fut.result()
+            if r.get("error"):
+                tooltip(r["error"], parent=self)
+                return
+            cards = r.get("cards") or []
+            if not cards:
+                tooltip("No passing cards (no source, or all failed the checker).", parent=self)
+                return
+            col = self.mw.col
+            nt = col.models.by_name("Basic") or col.models.current()
+            did = col.decks.id("MCAT::AI-Targeted (graph-guided)")
+            for c in cards:
+                note = col.new_note(nt)
+                note["Front"] = c["front"]
+                note["Back"] = (f"{c['back']}<br><br><small>Source: {c.get('source','')} "
+                                f"\u00a7{c.get('citation','')}</small>")
+                note.tags = [c["topic"], "mcat::ai_targeted"]
+                col.add_note(note, did)
+            tooltip(f"Added {len(cards)} grounded AI cards for {topic.split('::')[-1]}.", parent=self)
+            self.refresh()
+
+        self.mw.taskman.run_in_background(task, on_done)
 
     def refresh(self) -> None:
         self.form.web.load_sveltekit_page("graphs")

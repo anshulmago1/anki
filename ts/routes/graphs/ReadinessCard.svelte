@@ -79,7 +79,54 @@ scores + ranges + give-up rule + the global next-best-action list.
         }
     });
 
-    async function readPerf(): Promise<Record<string, { correct: number; total: number }>> {
+    // A single answered exam-style question: 3PL item params + the outcome.
+    interface PerfItem {
+        a: number; // discrimination
+        b: number; // difficulty
+        c: number; // guessing (~0.25 for a 4-choice MCQ)
+        correct: number; // 0/1
+    }
+
+    // 3PL item response function. Mirrors analysis/irt_fit.py::p_correct.
+    function p3pl(theta: number, a: number, b: number, c: number): number {
+        return c + (1 - c) / (1 + Math.exp(-a * (theta - b)));
+    }
+
+    // Per-section ability estimate: grid-search MLE over theta plus a Fisher-
+    // information standard error. This is a direct port of
+    // analysis/irt_fit.py::estimate_theta (grid np.linspace(-4, 4, 161); first
+    // argmax wins on ties; 3PL Fisher info per item), so the LIVE Performance
+    // number is genuinely IRT rather than a correct/total proxy.
+    function estimateTheta(items: PerfItem[]): { theta: number; se: number } {
+        const N = 161; // np.linspace(-4, 4, 161)
+        let bestTheta = 0;
+        let bestLL = -Infinity;
+        for (let i = 0; i < N; i++) {
+            const theta = -4 + (8 * i) / (N - 1);
+            let ll = 0;
+            for (const it of items) {
+                let p = p3pl(theta, it.a, it.b, it.c);
+                p = Math.min(Math.max(p, 1e-6), 1 - 1e-6);
+                ll += it.correct * Math.log(p) + (1 - it.correct) * Math.log(1 - p);
+            }
+            if (ll > bestLL) {
+                // strict > keeps the first grid point on ties, matching np.argmax
+                bestLL = ll;
+                bestTheta = theta;
+            }
+        }
+        let info = 0;
+        for (const it of items) {
+            let p = p3pl(bestTheta, it.a, it.b, it.c);
+            p = Math.min(Math.max(p, 1e-6), 1 - 1e-6);
+            // 3PL Fisher information for one item (see irt_fit.estimate_theta)
+            info += it.a ** 2 * ((p - it.c) ** 2 / (1 - it.c) ** 2) * ((1 - p) / p);
+        }
+        const se = info > 0 ? 1 / Math.sqrt(info) : Infinity;
+        return { theta: bestTheta, se };
+    }
+
+    async function readPerf(): Promise<Record<string, { items: PerfItem[] }>> {
         try {
             // mcat_perf may not exist yet (no exam-style questions answered). A
             // missing key is expected, so suppress the global error dialog and
@@ -95,19 +142,32 @@ scores + ranges + give-up rule + the global next-best-action list.
     async function load(): Promise<ReadinessResponse> {
         const perf = await readPerf();
         const sections = Object.entries(OUTLINE).map(([section, topicWeights]) => {
-            const rec = perf[section] ?? { correct: 0, total: 0 };
-            const total = rec.total ?? 0;
-            const performance = total ? rec.correct / total : 0;
-            const thetaSe = total ? 1.5 / Math.sqrt(total + 1) : 9.9;
+            const items = perf[section]?.items ?? [];
+            // Genuine 3PL-IRT: estimate section ability by MLE, then P_s is the
+            // mean predicted correctness over the answered items at that ability.
+            let performance = 0;
+            let thetaSe = 9.9; // no items -> abstain on SE (give-up rule)
+            if (items.length) {
+                const { theta, se } = estimateTheta(items);
+                performance =
+                    items.reduce((acc, it) => acc + p3pl(theta, it.a, it.b, it.c), 0) /
+                    items.length;
+                thetaSe = Number.isFinite(se) ? se : 9.9;
+            }
             return {
                 section,
                 topicPrefix: `mcat::${section.toLowerCase()}`,
                 topicWeights,
                 performance,
                 thetaSe,
+                // Learning-science multipliers are NEUTRAL (1.0) in the live score:
+                // spacing adherence, interleaving, and retrieval-timing quality are
+                // not yet measured from session logs, so we do not apply an
+                // unearned boost. The gated versions (Cepeda 2008 / Rohrer /
+                // Dunlosky) live in analysis/readiness.py and the ablation study.
                 alphaSpace: 1,
-                alphaInter: 1.3,
-                alphaTest: 1.5,
+                alphaInter: 1,
+                alphaTest: 1,
             };
         });
         return await computeReadiness({
@@ -176,7 +236,7 @@ scores + ranges + give-up rule + the global next-best-action list.
                         <div>
                             <div class="lbl">Performance</div>
                             <div class="val">{s.performance ? s.performance.value.toFixed(2) : "\u2014"}</div>
-                            <div class="ev">transfer (IRT)</div>
+                            <div class="ev">transfer (3PL IRT)</div>
                         </div>
                         <div>
                             <div class="lbl">Readiness</div>
@@ -194,8 +254,12 @@ scores + ranges + give-up rule + the global next-best-action list.
         </div>
 
         <div class="caveat">
-            Memory is live FSRS from your reviews; Performance is from your in-app question
-            checks; the section&rarr;score map is evidence-based but not yet field-calibrated.
+            Memory is live FSRS from your reviews; Performance is a 3PL-IRT ability
+            (θ) estimated by MLE from your in-app question checks; the section&rarr;score
+            map is evidence-based but not yet field-calibrated. Learning-science
+            multipliers (spacing, interleaving, testing) are neutral here until
+            session-level study quality is measured, so the score reflects no
+            unearned boost.
         </div>
     </div>
 {:else if errored}

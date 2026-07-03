@@ -194,6 +194,10 @@ a single copy; the engine measures the mastery).
     function study(id: string): void {
         bridgeCommand(`browserSearch:tag:${id}`);
     }
+    function generateFor(id: string): void {
+        // one-click graph-guided AI generation for this topic (handled in stats.py)
+        bridgeCommand(`aiTargeted:${id}`);
+    }
     function pct(x: number | undefined): string {
         return x === undefined ? "\u2014" : `${Math.round(x * 100)}%`;
     }
@@ -314,6 +318,9 @@ a single copy; the engine measures the mastery).
                         <button class="kg-study" on:click={() => study(sel.id)}>
                             Study these cards &rarr;
                         </button>
+                        <button class="kg-gen" on:click={() => generateFor(sel.id)}>
+                            Generate AI cards for this topic
+                        </button>
                     </div>
                 {:else}
                     <div class="kg-panel kg-empty">Click a node for its evidence.</div>
@@ -395,5 +402,10 @@ a single copy; the engine measures the mastery).
         background: #1a73e8; color: #fff; cursor: pointer; font-weight: 600;
     }
     .kg-study:hover { background: #1663c7; }
+    .kg-gen {
+        margin-top: 0.4em; width: 100%; padding: 0.4em; border: 1px solid #1a73e8;
+        border-radius: 6px; background: transparent; color: #1a73e8; cursor: pointer; font-weight: 600;
+    }
+    .kg-gen:hover { background: #1a73e814; }
     .kg-empty { opacity: 0.6; font-size: 0.85em; }
 </style>
