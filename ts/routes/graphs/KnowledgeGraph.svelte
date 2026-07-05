@@ -198,6 +198,11 @@ a single copy; the engine measures the mastery).
         // one-click graph-guided AI generation for this topic (handled in stats.py)
         bridgeCommand(`aiTargeted:${id}`);
     }
+    function generateAll(): void {
+        // one-click general source-grounded generation across all sources/topics
+        // (same pipeline as `make -C analysis ai`; handled in stats.py)
+        bridgeCommand("aiGenerate");
+    }
     function pct(x: number | undefined): string {
         return x === undefined ? "\u2014" : `${Math.round(x * 100)}%`;
     }
@@ -206,11 +211,20 @@ a single copy; the engine measures the mastery).
 </script>
 
 <div class="kg" class:collapsed>
-    <button class="kg-toggle" on:click={toggle} aria-expanded={!collapsed}>
-        <span class="chev">{collapsed ? "\u25B8" : "\u25BE"}</span>
-        {collapsed ? "Show knowledge graph" : "Hide knowledge graph"}
-        <span class="kg-toggle-sub">cue-diagnostics map &middot; next concept to master</span>
-    </button>
+    <div class="kg-header">
+        <button class="kg-toggle" on:click={toggle} aria-expanded={!collapsed}>
+            <span class="chev">{collapsed ? "\u25B8" : "\u25BE"}</span>
+            {collapsed ? "Show knowledge graph" : "Hide knowledge graph"}
+            <span class="kg-toggle-sub">cue-diagnostics map &middot; next concept to master</span>
+        </button>
+        <button
+            class="kg-generate"
+            on:click={generateAll}
+            title="Run the local source-grounded AI pipeline and import checker-passed cards"
+        >
+            Generate AI cards from sources
+        </button>
+    </div>
 
     {#if !collapsed}
         <div class="kg-legend">
@@ -344,11 +358,17 @@ a single copy; the engine measures the mastery).
         padding: 0.4em 1em;
         background: var(--canvas, #fafbfc);
     }
+    .kg-header {
+        display: flex;
+        align-items: center;
+        gap: 0.6em;
+    }
     .kg-toggle {
         display: flex;
         align-items: baseline;
         gap: 0.5em;
-        width: 100%;
+        flex: 1 1 auto;
+        min-width: 0;
         background: none;
         border: none;
         padding: 0.3em 0;
@@ -357,6 +377,21 @@ a single copy; the engine measures the mastery).
         font-weight: 700;
         color: var(--fg, #202124);
         text-align: left;
+    }
+    .kg-generate {
+        flex: none;
+        padding: 0.4em 0.8em;
+        border: none;
+        border-radius: 6px;
+        background: #1a73e8;
+        color: #fff;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .kg-generate:hover {
+        background: #1663c7;
     }
     .kg-toggle .chev { font-size: 0.9em; opacity: 0.7; width: 1em; }
     .kg-toggle-sub { font-weight: 400; font-size: 0.8em; opacity: 0.6; }

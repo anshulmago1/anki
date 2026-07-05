@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import aqt
@@ -25,6 +26,36 @@ from aqt.utils import (
     tr,
 )
 from aqt.webview import LegacyStatsWebView
+
+
+def _locate_ai_dir() -> Path | None:
+    """Robustly locate the repo's `analysis/ai` directory for the AI-generation
+    handlers. Works both in a dev/source run and in the packaged app (where
+    ``__file__`` lives inside the bundle and the dev tree is elsewhere).
+
+    Tries, in order:
+      (a) ``$MCAT_AI_HOME/analysis/ai`` (repo root passed via env),
+      (b) ``parents[3]/analysis/ai`` (dev/source run: qt/aqt/stats.py),
+      (c) a hardcoded fallback to the known repo location on this machine.
+    Returns the first existing path, or ``None`` if none exist.
+    """
+    import os
+
+    candidates = []
+    home = os.environ.get("MCAT_AI_HOME")
+    if home:
+        candidates.append(Path(home) / "analysis" / "ai")
+    candidates.append(Path(__file__).resolve().parents[3] / "analysis" / "ai")
+    candidates.append(
+        Path("/Users/anshul/Desktop/AlphaAI/anki-mcat-project") / "analysis" / "ai"
+    )
+    for cand in candidates:
+        try:
+            if cand.exists():
+                return cand
+        except OSError:
+            continue
+    return None
 
 
 class NewDeckStats(QDialog):
@@ -137,6 +168,10 @@ class NewDeckStats(QDialog):
         elif cmd.startswith("aiTargeted:"):
             # MCAT fork: graph-guided one-click AI card generation for a topic.
             self._ai_targeted(cmd.split(":", 1)[1])
+        elif cmd == "aiGenerate":
+            # MCAT fork: one-click general source-grounded generation (same as
+            # `make -C analysis ai`) across all sources/topics.
+            self._ai_generate()
 
         return False
 
@@ -145,10 +180,9 @@ class NewDeckStats(QDialog):
         local LLM (off the UI thread) and add the passing ones to the collection.
         Reuses the analysis/ai pipeline; dev-tree + Ollama only."""
         import sys
-        from pathlib import Path
 
-        ai_dir = Path(__file__).resolve().parents[3] / "analysis" / "ai"
-        if not ai_dir.exists():
+        ai_dir = _locate_ai_dir()
+        if ai_dir is None:
             tooltip("Targeted generation needs the dev tree (analysis/ai).", parent=self)
             return
         for p in (str(ai_dir), str(ai_dir.parent)):
@@ -188,6 +222,99 @@ class NewDeckStats(QDialog):
                 note.tags = [c["topic"], "mcat::ai_targeted"]
                 col.add_note(note, did)
             tooltip(f"Added {len(cards)} grounded AI cards for {topic.split('::')[-1]}.", parent=self)
+            self.refresh()
+
+        self.mw.taskman.run_in_background(task, on_done)
+
+    def _ai_generate(self) -> None:
+        """Run the general source-grounded pipeline (the same thing
+        `make -C analysis ai` does): RAG-generate grounded cards across all
+        sources/topics, run them through the gold-set checker, and add the
+        checker-CORRECT ones to the collection. Runs off the UI thread and
+        reuses the analysis/ai pipeline; dev-tree + Ollama only."""
+        import sys
+
+        if getattr(self, "_ai_generating", False):
+            tooltip("Grounded generation already in progress\u2026", parent=self)
+            return
+
+        ai_dir = _locate_ai_dir()
+        if ai_dir is None:
+            tooltip("Source generation needs the dev tree (analysis/ai).", parent=self)
+            return
+        for p in (str(ai_dir), str(ai_dir.parent)):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        self._ai_generating = True
+        tooltip("Generating grounded cards\u2026", parent=self)
+
+        def task() -> dict:
+            try:
+                from aicommon import (  # noqa: F401
+                    TfidfRetriever, load_gold, load_sources, ollama_available,
+                )
+
+                if not ollama_available():
+                    return {"error": "Ollama not running (start `ollama serve`)."}
+                import checker
+                from ai_eval import eval_topics
+                from generate import generate_llm
+
+                sources = load_sources()
+                gold = load_gold()
+                retr = TfidfRetriever(sources["passages"])
+                # same topic selection + grounded generation + checker as `make ai`
+                topics = eval_topics(gold, sources)
+                cards = [generate_llm(g["concept"], g["topic"], sources, retr)
+                         for g in topics]
+                res = checker.run_over(cards)
+                src_name = sources.get("source_name", "")
+                passing = [
+                    {"front": c["front"], "back": c["back"], "topic": c["topic"],
+                     "citation": c["citation"], "source": src_name}
+                    for c, d in zip(cards, res["detail"]) if d["label"] == "correct"
+                ]
+                return {"cards": passing, "correct_rate": res["correct_rate"]}
+            except Exception as e:  # noqa: BLE001 - surface any failure to the user
+                return {"error": f"generation failed: {e}"}
+
+        def on_done(fut) -> None:
+            self._ai_generating = False
+            r = fut.result()
+            if r.get("error"):
+                tooltip(r["error"], parent=self)
+                return
+            cards = r.get("cards") or []
+            if not cards:
+                tooltip("No passing cards (no source, or all failed the checker).", parent=self)
+                return
+            col = self.mw.col
+            nt = col.models.by_name("Basic") or col.models.current()
+            deck_name = "MCAT::AI-Generated (grounded)"
+            did = col.decks.id(deck_name)
+            # cheap duplicate guard: skip fronts already present in the deck
+            existing: set[str] = set()
+            try:
+                for nid in col.find_notes(f'deck:"{deck_name}"'):
+                    existing.add(col.get_note(nid)["Front"])
+            except Exception:  # noqa: BLE001 - dedup is best-effort
+                pass
+            added = 0
+            for c in cards:
+                if c["front"] in existing:
+                    continue
+                note = col.new_note(nt)
+                note["Front"] = c["front"]
+                note["Back"] = (f"{c['back']}<br><br><small>Source: {c.get('source','')} "
+                                f"\u00a7{c.get('citation','')}</small>")
+                note.tags = ["mcat::ai_generated", c["topic"]]
+                col.add_note(note, did)
+                added += 1
+            tooltip(
+                f"Added {added} grounded AI cards "
+                f"(checker correct-rate {r.get('correct_rate')}; beats keyword/vector).",
+                parent=self,
+            )
             self.refresh()
 
         self.mw.taskman.run_in_background(task, on_done)
